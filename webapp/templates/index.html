@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GAME MIDI 转换品质测试</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "Segoe UI", Roboto, "PingFang SC",
+                   "Microsoft YaHei", sans-serif;
+      max-width: 960px; margin: 0 auto; padding: 24px;
+      background: #f7f7f9; color: #222; line-height: 1.6;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 4px; }
+    .sub { color: #666; font-size: 0.9rem; margin-bottom: 20px; }
+    .card {
+      background: #fff; border: 1px solid #e3e3e8; border-radius: 10px;
+      padding: 20px; margin-bottom: 16px;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 0.9rem; }
+    select, input[type=file] {
+      padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px;
+      font-size: 0.9rem; background: #fff; width: 100%;
+    }
+    /* row 1: file picker takes the full width */
+    .file-row { margin-bottom: 14px; }
+    /* row 2: language + model + button share one line */
+    .opt-row {
+      display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;
+    }
+    .opt-row > .field { flex: 1 1 160px; min-width: 140px; }
+    .opt-row > .btn-field { flex: 0 0 auto; }
+    button {
+      padding: 10px 22px; border: none; border-radius: 6px; cursor: pointer;
+      background: #2b6cb0; color: #fff; font-size: 0.95rem; font-weight: 600;
+    }
+    button:disabled { background: #9aa; cursor: not-allowed; }
+    #progress-wrap { display: none; margin-top: 14px; }
+    .bar {
+      height: 8px; background: #e3e3e8; border-radius: 4px; overflow: hidden;
+      margin: 8px 0;
+    }
+    .bar > div {
+      height: 100%; background: #2b6cb0; width: 0; transition: width .3s;
+    }
+    #stage-detail { color: #666; font-size: 0.85rem; }
+    #error {
+      color: #c53030; background: #fff5f5; border: 1px solid #fed7d7;
+      border-radius: 6px; padding: 10px 12px; display: none;
+    }
+    .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .player { background: #fafafa; border-radius: 8px; padding: 14px; }
+    .player h3 { margin: 0 0 8px; font-size: 0.95rem; }
+    audio { width: 100%; }
+    .stats { font-size: 0.85rem; color: #555; margin-top: 8px; }
+    .stats span { display: inline-block; margin-right: 18px; }
+    .links { margin-top: 10px; font-size: 0.85rem; }
+    .links a { color: #2b6cb0; margin-right: 14px; text-decoration: none; }
+    .links a:hover { text-decoration: underline; }
+    .hint { font-size: 0.8rem; color: #888; margin-top: 6px; }
+    #done-wrap { display: none; }
+  </style>
+</head>
+<body>
+  <h1>GAME MIDI 转换品质测试</h1>
+  <div class="sub">上传人声音频 → ONNX 推理转 MIDI → fluidsynth 合成 → A/B 试听对比</div>
+
+  <div class="card">
+    <div class="file-row">
+      <label for="audio">音频文件 (wav/flac/mp3/aac/ogg/m4a)</label>
+      <input type="file" id="audio" accept=".wav,.flac,.mp3,.aac,.ogg,.m4a">
+    </div>
+    <div class="opt-row">
+      <div class="field">
+        <label for="language">语言</label>
+        <select id="language">
+          <option value="auto">自动 (universal)</option>
+          {% for lang in languages %}
+            <option value="{{ lang }}">{{ lang }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="model">模型</label>
+        <select id="model">
+          {% for m in models %}
+            <option value="{{ m.key }}"
+              {% if m.key == default_model %}selected{% endif %}>
+              {{ m.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="btn-field">
+        <button id="submit" onclick="startUpload()">开始转换</button>
+      </div>
+    </div>
+    <div class="hint">处理约需 5-15 秒/分钟音频，请耐心等待。合成音色为钢琴（便于听清音高节奏）。</div>
+
+    <div id="progress-wrap">
+      <div class="bar"><div id="bar-fill"></div></div>
+      <div id="stage-detail"></div>
+    </div>
+    <div id="error"></div>
+  </div>
+
+  <div id="done-wrap">
+    <div class="card">
+      <div class="compare">
+        <div class="player">
+          <h3>原始音频</h3>
+          <audio id="orig-player" controls></audio>
+        </div>
+        <div class="player">
+          <h3>MIDI 合成 (钢琴)</h3>
+          <audio id="synth-player" controls></audio>
+        </div>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div class="links">
+        <a id="midi-link" href="#" download>下载 MIDI</a>
+        <a id="txt-link" href="#" download>下载音符文本</a>
+        <a id="synth-link" href="#" download>下载合成音频</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function startUpload() {
+      const fileInput = document.getElementById('audio');
+      if (!fileInput.files.length) { alert('请先选择音频文件'); return; }
+      const fd = new FormData();
+      fd.append('audio', fileInput.files[0]);
+      fd.append('language', document.getElementById('language').value);
+      fd.append('model', document.getElementById('model').value);
+
+      const btn = document.getElementById('submit');
+      btn.disabled = true;
+      btn.textContent = '处理中...';
+      document.getElementById('error').style.display = 'none';
+      document.getElementById('done-wrap').style.display = 'none';
+      const pw = document.getElementById('progress-wrap');
+      pw.style.display = 'block';
+      document.getElementById('bar-fill').style.width = '0%';
+      document.getElementById('stage-detail').textContent = '上传中...';
+
+      fetch('/upload', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(d => {
+          if (d.error) { fail(d.error); return; }
+          pollStatus(d.job_id);
+        })
+        .catch(e => fail('上传失败: ' + e));
+    }
+
+    function pollStatus(jobId) {
+      fetch('/status/' + jobId)
+        .then(r => r.json())
+        .then(d => {
+          if (d.error) { fail(d.error); return; }
+          document.getElementById('bar-fill').style.width = d.progress + '%';
+          const detail = (d.stage || '') + (d.stage_detail ? ' · ' + d.stage_detail : '');
+          document.getElementById('stage-detail').textContent = detail;
+          if (d.status === 'done') {
+            loadResult(jobId);
+          } else if (d.status === 'error') {
+            fail(d.error || '处理失败');
+          } else {
+            setTimeout(() => pollStatus(jobId), 800);
+          }
+        })
+        .catch(e => setTimeout(() => pollStatus(jobId), 1500));
+    }
+
+    function loadResult(jobId) {
+      fetch('/result/' + jobId)
+        .then(r => r.json())
+        .then(d => {
+          document.getElementById('orig-player').src = d.original_url;
+          document.getElementById('synth-player').src = d.synth_url;
+          document.getElementById('midi-link').href = d.midi_url;
+          document.getElementById('txt-link').href = d.txt_url;
+          document.getElementById('synth-link').href = d.synth_url;
+          const s = d.stats || {};
+          document.getElementById('stats').innerHTML =
+            '<span>音符数: <b>' + (s.note_count ?? '-') + '</b></span>' +
+            '<span>音高范围: <b>' + (s.pitch_min ?? '-') + ' ~ ' +
+              (s.pitch_max ?? '-') + '</b> (MIDI)</span>' +
+            '<span>时长: <b>' + (s.duration_sec ?? '-') + 's</b></span>';
+          document.getElementById('progress-wrap').style.display = 'none';
+          document.getElementById('done-wrap').style.display = 'block';
+          const btn = document.getElementById('submit');
+          btn.disabled = false;
+          btn.textContent = '开始转换';
+        })
+        .catch(e => fail('加载结果失败: ' + e));
+    }
+
+    function fail(msg) {
+      document.getElementById('error').textContent = msg;
+      document.getElementById('error').style.display = 'block';
+      document.getElementById('progress-wrap').style.display = 'none';
+      const btn = document.getElementById('submit');
+      btn.disabled = false;
+      btn.textContent = '开始转换';
+    }
+  </script>
+</body>
+</html>

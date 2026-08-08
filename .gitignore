@@ -15,3 +15,7 @@ venv
 
 .vscode
 .ipynb_checkpoints/
+
+inputFiles/
+onnx/
+webapp/static/
