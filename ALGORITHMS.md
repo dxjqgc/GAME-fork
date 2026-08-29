@@ -12,14 +12,14 @@ This report describes the algorithms, model architectures, loss formulations, an
 
 ## 2. Problem Formulation
 
-Given a monophonic singing voice waveform, the goal is to produce a sequence of notes $\{ (p_i, \text{onset}_i, \text{offset}_i) \}_{i=1}^{M}$ where $p_i \in \mathbb{R}$ is the continuous MIDI pitch and onset/offset are in seconds. Note duration is implicitly determined by adjacent boundaries — it does not appear as an explicit model output.
+Given a monophonic singing voice waveform, the goal is to produce a sequence of notes $\lbrace{} (p_ {i}, \text{onset}_ {i}, \text{offset}_ {i}) \rbrace{}_ {i=1}^{M}$ where $p_i \in \mathbb{R}$ is the continuous MIDI pitch and onset/offset are in seconds. Note duration is implicitly determined by adjacent boundaries — it does not appear as an explicit model output.
 
 Internally, the model operates on a mel-spectrogram with time step $\Delta t = 10~\text{ms}$ (hop size 441 samples at 44100 Hz sample rate). Let $T$ be the number of frames. GAME segments the input into $N$ note/rest regions. Each region may be voiced ($v_i = 1$, a sung note) or unvoiced ($v_i = 0$, a rest or unpitched segment); only voiced regions are converted into output MIDI notes. The model produces:
 
-1. **Boundaries** $b \in \{0, 1\}^T$: transition boundaries between adjacent regions. The phrase start and end act as implicit boundaries, so there are $\sum_t b_t = N - 1$ explicit internal boundaries partitioning the phrase into $N$ regions.
-2. **Regions** $r \in \{1, \dots, N\}^T$: derived from boundaries via cumulative sum, $r_t = 1 + \sum_{s \leq t} b_s$, mapping each frame to its containing region index (0 is reserved for padding). The onset of region 1 is the phrase start; the onset of region $i > 1$ is the $(i-1)$-th boundary frame. The offset of region $i$ is the onset of region $i+1$ (or the phrase end for the last region).
+1. **Boundaries** $b \in \lbrace{}0, 1\rbrace{}^T$: transition boundaries between adjacent regions. The phrase start and end act as implicit boundaries, so there are $\sum_t b_t = N - 1$ explicit internal boundaries partitioning the phrase into $N$ regions.
+2. **Regions** $r \in \lbrace{}1, \dots, N\rbrace{}^T$: derived from boundaries via cumulative sum, $r_t = 1 + \sum_{s \leq t} b_s$, mapping each frame to its containing region index (0 is reserved for padding). The onset of region 1 is the phrase start; the onset of region $i > 1$ is the $(i-1)$-th boundary frame. The offset of region $i$ is the onset of region $i+1$ (or the phrase end for the last region).
 3. **Pitch values** $s \in [0, 128]^N$: continuous MIDI pitch for each region.
-4. **Presence** $v \in \{0, 1\}^N$: whether each region is voiced (has a pitch) or unvoiced (rest). Presence is not predicted by a separate head; it is derived from the pitch-bin activations (§5.3).
+4. **Presence** $v \in \lbrace{}0, 1\rbrace{}^N$: whether each region is voiced (has a pitch) or unvoiced (rest). Presence is not predicted by a separate head; it is derived from the pitch-bin activations (§5.3).
 
 ---
 
@@ -57,9 +57,9 @@ The EBF layer (used by both encoder and segmenter backbones) consists of three s
 
 $$
 \begin{aligned}
-x' &= x + \gamma_1 \odot \tfrac{1}{2}\,\text{FFN}_1(\text{Norm}_1(x)) \\
-x'' &= x' + \gamma_2 \odot \text{PAC}(x') \\
-\text{EBF}(x) &= x'' + \gamma_3 \odot \tfrac{1}{2}\,\text{FFN}_2(\text{Norm}_2(x''))
+x' &= x + \gamma_1 \odot \tfrac{1}{2}\thinspace\text{FFN}_1(\text{Norm}_1(x)) \cr
+x'' &= x' + \gamma_2 \odot \text{PAC}(x') \cr
+\text{EBF}(x) &= x'' + \gamma_3 \odot \tfrac{1}{2}\thinspace\text{FFN}_2(\text{Norm}_2(x''))
 \end{aligned}
 $$
 
@@ -68,11 +68,11 @@ where $\gamma_1, \gamma_2, \gamma_3 \in \mathbb{R}^d$ are per-channel learnable 
 The PAC (Parallel Attention + Convolution) block runs self-attention and a convolutional MLP in parallel, then merges their outputs through a depthwise convolution:
 
 $$
-\text{PAC}(x) = \text{MergeConv}\big([\,\text{Attn}(\text{Norm}_a(x)) \;\|\; \text{CgMLP}(\text{Norm}_c(x))\,]\big)
+\text{PAC}(x) = \text{MergeConv}\big([\thinspace\text{Attn}(\text{Norm}_a(x)) \mkern5mu\Vert\mkern5mu \text{CgMLP}(\text{Norm}_c(x))\thinspace]\big)
 $$
 
 - **Self-Attention**: Multi-head scaled dot-product attention with RoPE.
-- **CgMLP**: Depthwise-separable convolution with a gated linear unit (GLU). A $1\!\times\!1$ convolution expands channels to $2d_{\text{inner}}$, a GELU activation is applied, then the result is split into gate and value halves. The value path goes through RMSNorm and a depthwise convolution (kernel size $k_m$) followed by another GELU, then the gate and value are multiplied element-wise. A final $1\!\times\!1$ convolution projects back to dimension $d$. The depthwise kernel size is $k_m = 31$ in all EBF backbones.
+- **CgMLP**: Depthwise-separable convolution with a gated linear unit (GLU). A $1\negthinspace\times\negthinspace1$ convolution expands channels to $2d_{\text{inner}}$, a GELU activation is applied, then the result is split into gate and value halves. The value path goes through RMSNorm and a depthwise convolution (kernel size $k_m$) followed by another GELU, then the gate and value are multiplied element-wise. A final $1\negthinspace\times\negthinspace1$ convolution projects back to dimension $d$. The depthwise kernel size is $k_m = 31$ in all EBF backbones.
 - **Merge**: Concatenated attention and CgMLP outputs pass through a depthwise convolution ($k_m$) with residual connection, then a linear projection back to the hidden dimension $d$. In all model scales, $k_m = 31$ frames (310 ms).
 - **FFN**: Gated Linear Unit with $4\times$ expansion ratio and GELU activation.
 
@@ -125,7 +125,7 @@ $$
 \text{RoPE}(x, pos) = x \odot \cos(pos \cdot \Theta) + \text{rotate}(x) \odot \sin(pos \cdot \Theta)
 $$
 
-where $\Theta_k = 10000^{-2k/d}$ for $k = 0, \dots, d/2-1$. Both queries and keys receive the same transformation: $\text{RoPE}(q, k, pos) = (\text{RoPE}(q, pos),\; \text{RoPE}(k, pos))$.
+where $\Theta_k = 10000^{-2k/d}$ for $k = 0, \dots, d/2-1$. Both queries and keys receive the same transformation: $\text{RoPE}(q, k, pos) = (\text{RoPE}(q, pos),\mkern5mu \text{RoPE}(k, pos))$.
 
 ### 3.3 JEBF Backbone
 
@@ -133,11 +133,11 @@ The JEBF backbone extends the EBF pattern to two parallel streams — frame feat
 
 $$
 \begin{aligned}
-\mathbf{p} &\leftarrow \mathbf{p} + \text{FFN}_p(\text{Norm}(\mathbf{p})) \\
-\mathbf{x} &\leftarrow \mathbf{x} + \text{FFN}_x(\text{Norm}(\mathbf{x})) \\
-\mathbf{p}', \mathbf{x}' &\leftarrow \text{PJAC}(\mathbf{p}, \mathbf{x}, r) \\
-\mathbf{p} &\leftarrow \mathbf{p} + \mathbf{p}' ;\quad \mathbf{x} \leftarrow \mathbf{x} + \mathbf{x}' \\
-\mathbf{p} &\leftarrow \mathbf{p} + \text{FFN}_p(\text{Norm}(\mathbf{p})) \\
+\mathbf{p} &\leftarrow \mathbf{p} + \text{FFN}_p(\text{Norm}(\mathbf{p})) \cr
+\mathbf{x} &\leftarrow \mathbf{x} + \text{FFN}_x(\text{Norm}(\mathbf{x})) \cr
+\mathbf{p}', \mathbf{x}' &\leftarrow \text{PJAC}(\mathbf{p}, \mathbf{x}, r) \cr
+\mathbf{p} &\leftarrow \mathbf{p} + \mathbf{p}' ;\quad \mathbf{x} \leftarrow \mathbf{x} + \mathbf{x}' \cr
+\mathbf{p} &\leftarrow \mathbf{p} + \text{FFN}_p(\text{Norm}(\mathbf{p})) \cr
 \mathbf{x} &\leftarrow \mathbf{x} + \text{FFN}_x(\text{Norm}(\mathbf{x}))
 \end{aligned}
 $$
@@ -197,7 +197,7 @@ This is the core algorithmic innovation of GAME. Rather than predicting boundari
 
 ### 4.1 D3PM Formulation
 
-**State space**: Each frame $t$ can be in one of two states: $b_t \in \{0, 1\}$ (non-boundary or boundary). The full boundary sequence is $b \in \{0, 1\}^T$.
+**State space**: Each frame $t$ can be in one of two states: $b_t \in \lbrace{}0, 1\rbrace{}$ (non-boundary or boundary). The full boundary sequence is $b \in \lbrace{}0, 1\rbrace{}^T$.
 
 **Forward (noising) process**: Given ground-truth boundaries $b_0$, we obtain a noisy version $b_t$ at timestep $t$ by independently removing each boundary with probability $p(t)$:
 
@@ -243,25 +243,26 @@ The segmenter outputs frame-level logits $\ell \in \mathbb{R}^T$, trained to rec
 At inference time, the model performs $K$ denoising steps. The algorithm accepts an optional set of *known boundaries* $b_\text{known}$ (e.g., word boundaries from forced alignment) that are treated as immutable throughout the process:
 
 **Algorithm: D3PM Iterative Sampling**
+
 $$
 \begin{aligned}
-&\text{Input: } h^{(s)} \in \mathbb{R}^{T \times d},\; \text{mask} \in \{0,1\}^T,\; \text{language\_id},\; K,\; b_\text{known} \in \{0,1\}^T,\; \tau,\; \rho \\
-&\text{Output: } b \in \{0,1\}^T \\
-&b \leftarrow b_\text{known} \\
-&\Delta t \leftarrow 1 / K \\
-&\textbf{for } i = 0, \dots, K-1 \textbf{ do} \\
-&\quad t \leftarrow i \cdot \Delta t \\
-&\quad p \leftarrow (1 + \cos(t\pi)) / 2 \\
-&\quad b \leftarrow \text{remove\_mutable}(b,\; b_\text{known},\; p) \quad \text{(§4.5)} \\
-&\quad r \leftarrow \text{cumsum}(b) + 1 \\
-&\quad \ell \leftarrow \text{Segmenter}(h^{(s)},\; r,\; t,\; \text{language\_id}) \\
-&\quad b \leftarrow \text{soft\_boundary\_decode}(\sigma(\ell),\; \text{barriers}{=}b_\text{known},\; \tau,\; \rho) \\
-&\textbf{end for} \\
+&\text{Input: } h^{(s)} \in \mathbb{R}^{T \times d},\mkern5mu \text{mask} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \text{languageId},\mkern5mu K,\mkern5mu b_\text{known} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \tau,\mkern5mu \rho \cr
+&\text{Output: } b \in \lbrace{}0,1\rbrace{}^T \cr
+&b \leftarrow b_\text{known} \cr
+&\Delta t \leftarrow 1 / K \cr
+&\textbf{for } i = 0, \dots, K-1 \textbf{ do} \cr
+&\quad t \leftarrow i \cdot \Delta t \cr
+&\quad p \leftarrow (1 + \cos(t\pi)) / 2 \cr
+&\quad b \leftarrow \text{removeMutable}(b,\mkern5mu b_\text{known},\mkern5mu p) \quad \text{(\S4.5)} \cr
+&\quad r \leftarrow \text{cumsum}(b) + 1 \cr
+&\quad \ell \leftarrow \text{Segmenter}(h^{(s)},\mkern5mu r,\mkern5mu t,\mkern5mu \text{languageId}) \cr
+&\quad b \leftarrow \text{softBoundaryDecode}(\sigma(\ell),\mkern5mu \text{barriers}{=}b_\text{known},\mkern5mu \tau,\mkern5mu \rho) \cr
+&\textbf{end for} \cr
 &\textbf{return } b
 \end{aligned}
 $$
 
-When $b_\text{known} = \mathbf{0}$ (no external boundaries provided), the algorithm reduces to standard unconditional generation: $\text{remove\_mutable}$ behaves as uniform removal and no barriers constrain the decoder.
+When $b_\text{known} = \mathbf{0}$ (no external boundaries provided), the algorithm reduces to standard unconditional generation: $\text{removeMutable}$ behaves as uniform removal and no barriers constrain the decoder.
 
 The key insight is that at each step, the current boundary prediction is *re-noised* by randomly removing boundaries according to the schedule, then the model *re-predicts* all boundaries. This process gradually refines the boundary positions: early steps (high $p$, low $t$) remove many boundaries, forcing the model to make coarse structural decisions; later steps (low $p$, high $t$) preserve most boundaries, allowing fine-grained adjustment. The stochastic removal of *predicted* boundaries at each step implements a form of self-consistency regularization.
 
@@ -289,8 +290,9 @@ P(b'_t = 0 \mid b_t = 1) = p
 $$
 
 **Mutable-aware boundary removal**: Given a set of *immutable* boundaries (e.g., known word boundaries from forced alignment that must not be destroyed), removal is restricted to the remaining mutable subset. To keep the expected number of surviving boundaries consistent regardless of how many are immutable, the removal probability is scaled:
+
 $$
-P_\text{adj} = \min\!\left(1,\; \frac{n \cdot p}{m}\right)
+P_\text{adj} = \min\negthinspace\left(1,\mkern5mu \frac{n \cdot p}{m}\right)
 $$
 
 where $n$ is the total boundary count, $m$ the mutable count, and $p$ the target removal rate. Each mutable boundary is then independently removed with probability $P_\text{adj}$. When $m = 0$ (all boundaries are immutable), no removal is performed.
@@ -303,7 +305,7 @@ The estimator predicts a continuous MIDI pitch value for each note region. Unlik
 
 ### 5.1 Region Conditioning
 
-The estimator receives $h^{(e)}$ (from encoder) and a region map $r \in \{0, 1, \dots, N\}^T$ (where $r_t = 0$ indicates padding). The region map can come from:
+The estimator receives $h^{(e)}$ (from encoder) and a region map $r \in \lbrace{}0, 1, \dots, N\rbrace{}^T$ (where $r_t = 0$ indicates padding). The region map can come from:
 - **Ground-truth boundaries** (during training).
 - **Predicted boundaries from the segmenter** (during inference).
 - **Externally provided boundaries** (e.g., word boundaries from forced alignment).
@@ -323,10 +325,10 @@ Each note region is represented by one learnable *pool token* — a learned embe
 The cross-stream attention mask restricts each pool token to attend only to frames within its corresponding region:
 
 $$
-\text{AttnMask}[i, j] = \begin{cases} 1 & \text{if same\_stream}(i, j) \lor \text{same\_region}(i, j) \\ 0 & \text{otherwise} \end{cases}
+\text{AttnMask}[i, j] = \begin{cases} 1 & \text{if }\text{sameStream}(i, j) \lor \text{sameRegion}(i, j) \cr 0 & \text{otherwise} \end{cases}
 $$
 
-where $\text{same\_stream}(i, j)$ is true when tokens $i$ and $j$ belong to the same stream (both pool or both frame), and $\text{same\_region}(i, j)$ holds when the region ID of token $i$ equals that of token $j$. Since all pool tokens can attend to each other via the same-stream rule, they can share information across regions — this is intentional, allowing the estimator to model inter-note dependencies such as relative pitch relationships. Optionally, a **soft region bias** replaces the hard mask with a learned distance penalty:
+where $\text{sameStream}(i, j)$ is true when tokens $i$ and $j$ belong to the same stream (both pool or both frame), and $\text{sameRegion}(i, j)$ holds when the region ID of token $i$ equals that of token $j$. Since all pool tokens can attend to each other via the same-stream rule, they can share information across regions — this is intentional, allowing the estimator to model inter-note dependencies such as relative pitch relationships. Optionally, a **soft region bias** replaces the hard mask with a learned distance penalty:
 
 $$
 \text{bias}(i, j) = -\alpha \cdot |r_i - r_j|
@@ -351,9 +353,11 @@ After the JEBF backbone, pool tokens are projected to $K = 257$ bins through a l
 2. Find the bin with maximum probability: $\hat{c} = \arg\max_k \text{probs}[k]$.
 3. Define a window of width $w = \lceil 3\sigma_p / \Delta k \rceil$ around $\hat{c}$, where $\sigma_p = 0.5$ semitones and $\Delta k$ is the bin width.
 4. Compute the weighted centroid:
+
 $$
 p = \frac{\sum_{k=\hat{c}-w}^{\hat{c}+w} \text{probs}[k] \cdot \text{center}[k]}{\sum_{k=\hat{c}-w}^{\hat{c}+w} \text{probs}[k]}
 $$
+
 5. Determine presence: $\text{presence} = \max_k \text{probs}[k] \geq \tau_v$, where $\tau_v = 0.2$. No separate presence classifier head exists — presence is derived from the same $257$-bin pitch logits. When a region is predicted as unvoiced, its pitch value is unused.
 
 The weighted centroid recovers continuous pitch values from the quantized bin representation, producing floating-point MIDI values suitable for expressive synthesis.
@@ -367,13 +371,13 @@ GAME uses three complementary loss terms, each targeting a different aspect of t
 ### 6.1 Regional Cosine Similarity Loss
 
 $$
-\mathcal{L}_\text{region} = 1 - \frac{\sum_{i,j} \text{sign}_{ij} \cdot \text{cos\_sim}(x_i, x_j) \cdot \text{mask}_{ij}}{\sum_{i,j} \text{mask}_{ij}}
+\mathcal{L}_\text{region} = 1 - \frac{\sum_{i,j} \text{sign}_{ij} \cdot \text{cosSim}(x_i, x_j) \cdot \text{mask}_{ij}}{\sum_{i,j} \text{mask}_{ij}}
 $$
 
 where $x \in \mathbb{R}^{T \times 16}$ is an intermediate latent from the segmenter, and the sign and mask matrices are defined over frame pairs $(i, j)$:
 
 $$
-\text{sign}_{ij} = \begin{cases} +1 & \text{if } r_i = r_j \quad \text{(same region: positive pull)} \\ -\exp\big(1 - |r_i - r_j|\big) & \text{if } r_i \neq r_j \;\text{and}\; |r_i - r_j| \leq w \quad \text{(nearby different: negative push)} \\ 0 & \text{otherwise (masked out)} \end{cases}
+\text{sign}_{ij} = \begin{cases} +1 & \text{if } r_i = r_j \quad \text{(same region: positive pull)} \cr -\exp\big(1 - |r_i - r_j|\big) & \text{if } r_i \neq r_j \mkern5mu\text{and}\mkern5mu |r_i - r_j| \leq w \quad \text{(nearby different: negative push)} \cr 0 & \text{otherwise (masked out)} \end{cases}
 $$
 
 $$
@@ -382,18 +386,18 @@ $$
 
 with neighborhood size $w = 5$.
 
-This is a **contrastive loss** operating on the segmenter's internal representation: it encourages the latent features of frames within the same note region to be similar (cosine similarity → 1), while pushing apart features of neighboring but different regions. The exponential decay factor ($-\exp(1 - |r_i - r_j|)$) makes the repulsive force weaker for regions that are farther apart, focusing the contrastive signal on temporally adjacent regions where boundary localization is most critical. The upper-triangular mask avoids double-counting. No explicit negative samples are mined — the loss naturally contrasts all valid frame pairs within the neighborhood.
+This is a **contrastive loss** operating on the segmenter's internal representation: it encourages the latent features of frames within the same note region to be similar (cosine similarity → 1), while pushing apart features of neighboring but different regions. The exponential decay factor $(-\exp(1 - \lvert r_ {i} - r_ {j} \rvert))$ makes the repulsive force weaker for regions that are farther apart, focusing the contrastive signal on temporally adjacent regions where boundary localization is most critical. The upper-triangular mask avoids double-counting. No explicit negative samples are mined — the loss naturally contrasts all valid frame pairs within the neighborhood.
 
 ### 6.2 Gaussian Soft Boundary Loss
 
 $$
-\mathcal{L}_\text{boundary} = \text{BCEWithLogits}\big(\ell,\; b_\text{soft}\big)
+\mathcal{L}_\text{boundary} = \text{BCEWithLogits}\big(\ell,\mkern5mu b_\text{soft}\big)
 $$
 
 where $\ell \in \mathbb{R}^T$ are the boundary logits and $\text{soften}(\cdot)$ applies a Gaussian blur to the ground-truth binary boundaries with kernel width $\sigma_b = 1.0$:
 
 $$
-b_\text{soft}[i] = \exp\!\left(-\frac{1}{2} \cdot \frac{d(i)^2}{\sigma_b^2}\right), \qquad
+b_\text{soft}[i] = \exp\negthinspace\left(-\frac{1}{2} \cdot \frac{d(i)^2}{\sigma_b^2}\right), \qquad
 d(i) = \min_{j: b_0[j]=1} |i - j|
 $$
 
@@ -404,7 +408,7 @@ This softening acknowledges the inherent ambiguity in boundary localization: a b
 ### 6.3 Gaussian Blurred Bins Loss
 
 $$
-\mathcal{L}_\text{note} = \text{BCEWithLogits}\big(\ell^\text{note},\; \text{blur}(p_0, v_0)\big)
+\mathcal{L}_\text{note} = \text{BCEWithLogits}\big(\ell^\text{note},\mkern5mu \text{blur}(p_0, v_0)\big)
 $$
 
 where $\ell^\text{note} \in \mathbb{R}^{N \times 257}$ are per-note logits over $K = 257$ uniformly spaced bins covering MIDI range $[0, 128]$. The target is constructed by placing a Gaussian kernel at the ground-truth pitch value:
@@ -413,7 +417,7 @@ $$
 t_k = v_0 \cdot \exp\left(-\frac{1}{2} \cdot \frac{(\text{center}_k - p_0)^2}{\sigma_p^2}\right)
 $$
 
-where $\sigma_p = 0.5$ semitones (converted to bin space) and $v_0 \in \{0, 1\}$ is the ground-truth presence flag (0 for rest notes zeros out all bins).
+where $\sigma_p = 0.5$ semitones (converted to bin space) and $v_0 \in \lbrace{}0, 1\rbrace{}$ is the ground-truth presence flag (0 for rest notes zeros out all bins).
 
 The 257-bin quantization with $\sigma_p = 0.5$ semitones provides substantial overlap between adjacent bins, turning what would be a classification problem into a soft regression. The BCE loss treats each bin as an independent binary target, which has been shown to produce better-calibrated continuous predictions than cross-entropy or direct regression for this type of task.
 
@@ -459,13 +463,13 @@ The combination of waveform-level and spectrogram-level augmentations, particula
 
 GAME employs a comprehensive set of metrics spanning boundary quality, pitch accuracy, and note-level overlap. All metrics are computed on the validation split of the training dataset (held-out recordings from the same singers).
 
-Let the predicted and ground-truth boundary sequences be $\hat{b}, b \in \{0, 1\}^T$, and the frame-level predictions and targets (after flattening per-note estimates back to frames via the region map) be $\hat{p}, p \in \mathbb{R}^T$ for pitch scores and $\hat{v}, v \in \{0, 1\}^T$ for presence indicators.
+Let the predicted and ground-truth boundary sequences be $\hat{b}, b \in \lbrace{}0, 1\rbrace{}^T$, and the frame-level predictions and targets (after flattening per-note estimates back to frames via the region map) be $\hat{p}, p \in \mathbb{R}^T$ for pitch scores and $\hat{v}, v \in \lbrace{}0, 1\rbrace{}^T$ for presence indicators.
 
 ### 8.1 Boundary Metrics
 
-Let $B$ be the total number of evaluation samples. For each sample, let $b \in \{0,1\}^T$ be the ground-truth boundary sequence with $|b| = \sum_t b_t$ explicit boundaries, which partition the phrase into $|b| + 1$ regions. The implicit start-of-phrase and end-of-phrase act as additional boundaries for distance computation.
+Let $B$ be the total number of evaluation samples. For each sample, let $b \in \lbrace{}0,1\rbrace{}^T$ be the ground-truth boundary sequence with $|b| = \sum_t b_t$ explicit boundaries, which partition the phrase into $|b| + 1$ regions. The implicit start-of-phrase and end-of-phrase act as additional boundaries for distance computation.
 
-**Average Chamfer Distance** — the mean bidirectional frame distance between predicted and ground-truth boundary sets. Both sequence edges are treated as implicit boundaries (via padding of 1 on each side) to avoid degenerate cases when either set is empty. For each sample, let $I(b) = \{i \mid b_i = 1\} \cup \{-1, T\}$ be the set of boundary positions including the two implicit edges. The per-sample unnormalized distance is:
+**Average Chamfer Distance** — the mean bidirectional frame distance between predicted and ground-truth boundary sets. Both sequence edges are treated as implicit boundaries (via padding of 1 on each side) to avoid degenerate cases when either set is empty. For each sample, let $I(b) = \lbrace{}i \mid b_i = 1\rbrace{} \cup \lbrace{}-1, T\rbrace{}$ be the set of boundary positions including the two implicit edges. The per-sample unnormalized distance is:
 
 $$
 U(\hat{b}, b) = \frac{1}{2}\left( \sum_{i \in I(b)} \min_{j \in I(\hat{b})} |i - j| + \sum_{j \in I(\hat{b})} \min_{i \in I(b)} |j - i| \right)
@@ -482,7 +486,7 @@ This is equivalent to a weighted average of per-sample mean distances, with each
 **Quantity Error Rate (QER)** — measures the discrepancy in region count. A boundary $\hat{b}_i$ is a true positive if there exists a ground-truth boundary $b_j$ within tolerance $\tau = 5$ frames ($\pm 50$ ms) such that they are mutual nearest neighbors:
 
 $$
-\text{TP}(i) \iff \exists j: |i - j| \leq \tau \;\land\; \text{NN}(\hat{b}, i) = j \;\land\; \text{NN}(b, j) = i
+\text{TP}(i) \iff \exists j: |i - j| \leq \tau \mkern5mu\land\mkern5mu \text{NN}(\hat{b}, i) = j \mkern5mu\land\mkern5mu \text{NN}(b, j) = i
 $$
 
 False positives $\text{FP} = |\hat{b}| - \text{TP}$ are unmatched predicted boundaries, and false negatives $\text{FN} = |b| - \text{TP}$ are unmatched ground-truth boundaries. Since $k$ explicit boundaries partition a sample into $k + 1$ regions, the total number of regions across all $B$ samples is $\sum_s (|b_s| + 1) = |b| + B$. Using this region count as the reference:
@@ -504,6 +508,7 @@ The $+B$ terms account for the implicit region-start per sample, which stabilize
 Per-note predictions and ground truth are each flattened to frame level via their respective region maps: predicted pitches $\hat{s}$ are broadcast to frames using the predicted regions $\hat{r}$, while ground-truth pitches $s$ are broadcast using the ground-truth regions $r$. This means boundary errors propagate into the frame-level pitch metrics — if a predicted boundary is offset, frames near the boundary will be assigned to the wrong predicted note.
 
 **Note Presence Precision/Recall/F1** — binary classification of voiced vs. unvoiced frames:
+
 $$
 P_v = \frac{\sum_t \hat{v}_t \cdot v_t}{\sum_t \hat{v}_t}, \qquad R_v = \frac{\sum_t \hat{v}_t \cdot v_t}{\sum_t v_t}, \qquad F_1 = \frac{2 P_v R_v}{P_v + R_v}
 $$
@@ -523,17 +528,17 @@ $$
 **Overall Accuracy (OA)** — fraction of all frames where both the presence decision is correct and (for voiced frames) the pitch is within tolerance:
 
 $$
-\text{OA} = \frac{1}{T} \sum_t \Big( (\hat{v}_t = v_t) \;\land\; \big( \neg v_t \;\lor\; |\hat{p}_t - p_t| \leq \delta \big) \Big)
+\text{OA} = \frac{1}{T} \sum_t \Big( (\hat{v}_t = v_t) \mkern5mu\land\mkern5mu \big( \neg v_t \mkern5mu\lor\mkern5mu |\hat{p}_t - p_t| \leq \delta \big) \Big)
 $$
 
 This is the most comprehensive single metric, requiring correctness on both the discrete voiced/unvoiced decision and the continuous pitch value.
 
 ### 8.3 Note-Level Overlap Metrics
 
-Each note is modeled as a rectangle in time–pitch space: spanning its full duration in the time dimension and $[p - w/2,\; p + w/2]$ in the pitch dimension, where $w = 0.5$ semitones is the overlap width. The overlap between predicted and ground-truth note sets is:
+Each note is modeled as a rectangle in time–pitch space: spanning its full duration in the time dimension and $[p - w/2,\mkern5mu p + w/2]$ in the pitch dimension, where $w = 0.5$ semitones is the overlap width. The overlap between predicted and ground-truth note sets is:
 
 $$
-O = \sum_t \big( \hat{v}_t \land v_t \big) \cdot \max\big(0,\; w - |\hat{p}_t - p_t|\big)
+O = \sum_t \big( \hat{v}_t \land v_t \big) \cdot \max\big(0,\mkern5mu w - |\hat{p}_t - p_t|\big)
 $$
 
 **Overlap Precision/Recall** — the ratio of overlapping area to total predicted/target area:
@@ -591,7 +596,7 @@ All three model scales use the same training configuration.
 
 ## 10. Evaluation
 
-All evaluations use 16-bit mixed precision. The D3PM segmenter can trade quality for speed by varying the number of denoising steps $K$. For each model, a sweep over $K \in \{1, 2, 4, 8, 16\}$ is performed to determine the optimal setting, defined by the lowest **Quantity Error Rate** (the most comprehensive boundary metric). The best value per model is **bolded** in the sweep tables.
+All evaluations use 16-bit mixed precision. The D3PM segmenter can trade quality for speed by varying the number of denoising steps $K$. For each model, a sweep over $K \in \lbrace{}1, 2, 4, 8, 16\rbrace{}$ is performed to determine the optimal setting, defined by the lowest **Quantity Error Rate** (the most comprehensive boundary metric). The best value per model is **bolded** in the sweep tables.
 
 ### 10.1 Clean Evaluation
 
@@ -669,4 +674,3 @@ To measure robustness, each sample is evaluated a second time on a *dirty* spect
 - **Medium model benefits from more steps for clean**: The QER-based optimum is $K=8$ (0.1230), showing that more iterations improve boundary count accuracy even at higher parameter counts.
 - **Diminishing returns at $K \ge 8$**: $K=16$ is never optimal for QER. The practical recommendation is $K=4\text{–}8$ for most use cases, with $K=1\text{–}2$ offering a useful speed–quality trade-off (4–8× faster inference).
 - **Small model adapts to condition**: Optimal $K$ shifts from 2 (clean) to 8 (dirty), the inverse of the large model's behavior.
-
