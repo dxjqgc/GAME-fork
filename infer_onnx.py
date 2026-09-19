@@ -15,6 +15,7 @@ inference/slicer2.py and inference/callbacks.py to match `infer.py`'s behavior.
 import argparse
 import json
 import pathlib
+import threading
 from dataclasses import dataclass
 
 import librosa
@@ -156,6 +157,34 @@ class OnnxInfer:
         used = set(self.seg.get_providers())
         print(f"[onnx] providers in use: {sorted(used)}")
 
+        # CPU fallback sessions, lazily built on first OOM so the common
+        # (no-OOM) path pays nothing. run_slice_cpu() uses these instead of the
+        # GPU sessions to retry a slice that OOM'd on the GPU.
+        self._cpu_enc = None
+        self._cpu_seg = None
+        self._cpu_bd2dur = None
+        self._cpu_est = None
+        self._cpu_lock = threading.Lock()
+
+    def _ensure_cpu_sessions(self):
+        """Build CPU-only InferenceSessions once, lazily (OOM fallback)."""
+        with self._cpu_lock:
+            if self._cpu_enc is not None:
+                return
+            print("[onnx] building CPU fallback sessions (first OOM) ...")
+            providers = ["CPUExecutionProvider"]
+
+            def _sess(name):
+                return ort.InferenceSession(
+                    str(self.model_dir / f"{name}.onnx"),
+                    providers=providers,
+                )
+            self._cpu_enc = _sess("encoder")
+            self._cpu_seg = _sess("segmenter")
+            self._cpu_bd2dur = _sess("bd2dur")
+            self._cpu_est = _sess("estimator")
+            print("[onnx] CPU fallback sessions ready")
+
     def resolve_language(self, language):
         if not language:
             return 0  # universal / unset
@@ -175,12 +204,31 @@ class OnnxInfer:
         duration: float seconds
         Returns (durations[B,N], presence[B,N], scores[B,N]) as numpy.
         """
+        return self._run_slice(
+            (self.enc, self.seg, self.bd2dur, self.est),
+            waveform, duration, language_id, ts,
+            seg_threshold, seg_radius, est_threshold)
+
+    def run_slice_cpu(self, waveform, duration, language_id, ts,
+                      seg_threshold, seg_radius, est_threshold):
+        """Same as run_slice but on the CPU fallback sessions. Used to retry a
+        slice that OOM'd on the GPU. Builds the CPU sessions on first use."""
+        self._ensure_cpu_sessions()
+        return self._run_slice(
+            (self._cpu_enc, self._cpu_seg, self._cpu_bd2dur, self._cpu_est),
+            waveform, duration, language_id, ts,
+            seg_threshold, seg_radius, est_threshold)
+
+    def _run_slice(self, sessions, waveform, duration, language_id, ts,
+                   seg_threshold, seg_radius, est_threshold):
+        """Shared pipeline body. `sessions` is (enc, seg, bd2dur, est)."""
+        enc, seg, bd2dur, est = sessions
         wav = np.asarray(waveform, dtype=np.float32)[None, :]        # [1, L]
         dur = np.array([float(duration)], dtype=np.float32)          # [1]
         lang = np.array([int(language_id)], dtype=np.int64)          # [1]
 
         # ---- encoder ----
-        x_seg, x_est, maskT = self.enc.run(
+        x_seg, x_est, maskT = enc.run(
             None, {"waveform": wav, "duration": dur})
 
         # ---- segmenter (D3PM sampling loop) ----
@@ -203,7 +251,7 @@ class OnnxInfer:
                     "threshold": thr,
                     "radius": radius,
                 }
-                (boundaries,) = self.seg.run(None, inputs)
+                (boundaries,) = seg.run(None, inputs)
         else:
             # completion-style / no loop: single forward
             inputs = {
@@ -213,15 +261,15 @@ class OnnxInfer:
                 "t": np.array([0.0], dtype=np.float32),
                 "maskT": maskT, "threshold": thr, "radius": radius,
             }
-            (boundaries,) = self.seg.run(None, inputs)
+            (boundaries,) = seg.run(None, inputs)
 
         # ---- bd2dur: boundaries -> durations (seconds) + maskN ----
-        durations, maskN = self.bd2dur.run(
+        durations, maskN = bd2dur.run(
             None, {"boundaries": boundaries, "maskT": maskT})
 
         # ---- estimator: x_est, boundaries, maskT, maskN -> presence, scores
         est_thr = np.array(est_threshold, dtype=np.float32)
-        presence, scores = self.est.run(None, {
+        presence, scores = est.run(None, {
             "x_est": x_est,
             "boundaries": boundaries,
             "maskT": maskT,
@@ -234,8 +282,44 @@ class OnnxInfer:
 # --------------------------------------------------------------------------- #
 # Audio loading + slicing
 # --------------------------------------------------------------------------- #
+MAX_SLICE_SEC = 30.0
+"""Hard cap on a single slice duration fed to the encoder.
+
+The encoder is a transformer: its attention Softmax cost grows O(T^2) in the
+slice's token count T = duration / timestep. A long dry-vocal take with no
+silence (the Slicer only splits on silence) can produce a slice of many tens
+of seconds, blowing up GPU memory (CUDA OOM at the Softmax node). Any slice
+above this cap is split into <= MAX_SLICE_SEC sub-chunks before inference.
+30s at timestep=0.01s -> T=3000 -> ~3.6M attention elements per head, safe.
+"""
+
+
+def _split_long_slice(wav, offset, duration, samplerate, max_sec):
+    """If a slice is longer than max_sec, split it into <= max_sec sub-chunks.
+
+    Returns a list of (waveform, offset, duration). Splitting is a naive
+    equal-time cut (no overlap, no resync) because downstream note bookkeeping
+    (_process_item) clamps onsets/offsets to the slice length anyway, so
+    boundary notes may be slightly off but the process stays alive and the
+    vast majority of notes are correct.
+    """
+    if duration <= max_sec:
+        return [(wav, offset, duration)]
+    n = int(np.ceil(duration / max_sec))
+    # equal-sample split (last chunk absorbs the remainder)
+    boundaries = np.array_split(np.arange(len(wav)), n)
+    out = []
+    for b in boundaries:
+        w = wav[b[0]:b[-1] + 1]
+        off = offset + b[0] / samplerate
+        d = len(w) / samplerate
+        out.append((w, off, d))
+    return out
+
+
 def load_and_slice(filepath, samplerate):
-    """Load audio at samplerate (mono), slice by silence.
+    """Load audio at samplerate (mono), slice by silence, then cap any slice
+    longer than MAX_SLICE_SEC (long slices OOM the encoder attention).
     Returns list of (waveform_np, offset_sec, duration_sec)."""
     waveform, _ = librosa.load(str(filepath), sr=samplerate, mono=True)
     slicer = Slicer(
@@ -251,7 +335,10 @@ def load_and_slice(filepath, samplerate):
         w = np.asarray(c["waveform"], dtype=np.float32)
         off = float(c["offset"])
         d = w.shape[0] / samplerate
-        out.append((w, off, d))
+        # cap long slices so encoder attention (O(T^2)) doesn't OOM the GPU
+        for sub_w, sub_off, sub_d in _split_long_slice(
+                w, off, d, samplerate, MAX_SLICE_SEC):
+            out.append((sub_w, sub_off, sub_d))
     return out
 
 
@@ -276,9 +363,25 @@ def infer_audio_to_notes(infer, filepath, lang_id, ts,
     slices = load_and_slice(filepath, infer.samplerate)
     all_notes = []
     for idx, (wav, offset, duration) in enumerate(slices):
-        durations, presence, scores = infer.run_slice(
-            wav, duration, lang_id, ts,
-            seg_threshold, seg_radius_frames, est_threshold)
+        try:
+            durations, presence, scores = infer.run_slice(
+                wav, duration, lang_id, ts,
+                seg_threshold, seg_radius_frames, est_threshold)
+        except Exception as e:
+            # GPU OOM (onnxruntime: "CUDA failure 2: out of memory"). The
+            # MAX_SLICE_SEC cap should prevent this in normal operation, but if
+            # the GPU is already under pressure from other processes we retry
+            # the offending slice on CPU instead of letting the whole process
+            # core-dump. Other exceptions are re-raised unchanged.
+            msg = str(e).lower()
+            if "out of memory" not in msg and "cuda failure" not in msg:
+                raise
+            print(f"[infer] GPU OOM on slice {idx + 1}/{len(slices)} "
+                  f"(offset={offset:.1f}s dur={duration:.1f}s); "
+                  f"retrying on CPU ...")
+            durations, presence, scores = infer.run_slice_cpu(
+                wav, duration, lang_id, ts,
+                seg_threshold, seg_radius_frames, est_threshold)
         all_notes.extend(_process_item(
             durations[0], presence[0], scores[0], offset, duration))
         if progress is not None:

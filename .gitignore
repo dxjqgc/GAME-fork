@@ -19,3 +19,4 @@ venv
 inputFiles/
 onnx/
 webapp/static/
+webapp/v2m_jobs/
