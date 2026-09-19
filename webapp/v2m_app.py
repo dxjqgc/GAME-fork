@@ -46,6 +46,16 @@ from inference.pipeline.auto_lyric_hybrid import auto_lyric_hybrid_pipeline  # n
 PORT = int(os.environ.get("PORT", "5010"))
 V2M_EXP_DIR = pathlib.Path(webapp.v2m_patch.V2M_EXPERIMENTS)
 V2M_DEVICE = os.environ.get("V2M_DEVICE", "cuda")
+# Slicing: "default" (Slicer2 silence detection) has NO max-length cap and
+# ignores min/max_len_sec — the bounds monkey-patch in slicer_api only wraps
+# smart/heuristic/grid. Spleeter-separated vocals carry residual noise that
+# rarely dips below -30dB, so a whole song can collapse into one giant chunk
+# (~94s here) and Qwen3-ASR's segmenter attention then tries to allocate
+# ~11GB (batch*heads*T^2) and OOMs. "heuristic" hard-splits anything longer
+# than slice_max_sec at local energy minima, so the cap is guaranteed.
+V2M_SLICE_METHOD = os.environ.get("V2M_SLICE_METHOD", "heuristic")
+V2M_SLICE_MIN_SEC = float(os.environ.get("V2M_SLICE_MIN_SEC", "5.0"))
+V2M_SLICE_MAX_SEC = float(os.environ.get("V2M_SLICE_MAX_SEC", "10.0"))
 MAX_UPLOAD_MB = 100
 ALLOWED_EXT = {".wav", ".flac", ".mp3", ".aac", ".ogg", ".m4a"}
 
@@ -142,7 +152,9 @@ def _run_job(job_id: str, audio_path: str, language: str,
                 output_dir=out_dir,
                 # number format -> raw float MIDI pitch in the txt
                 output_formats=["txt"],
-                slicing_method="default",
+                slicing_method=V2M_SLICE_METHOD,
+                slice_min_sec=V2M_SLICE_MIN_SEC,
+                slice_max_sec=V2M_SLICE_MAX_SEC,
                 tempo=120.0,
                 quantization_step=0,
                 pitch_format="number",
