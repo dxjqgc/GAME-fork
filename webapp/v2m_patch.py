@@ -13,7 +13,8 @@ import pathlib
 import sys
 
 V2M_DIR = pathlib.Path(os.environ.get(
-    "V2M_DIR", "/mnt/d/Project/OpenSourceProject/Vocal2Midi"))
+    "V2M_DIR",
+    "/opt/py-work/GuitarSheetGenerator/vendor/vocal2midi"))
 if str(V2M_DIR) not in sys.path:
     sys.path.insert(0, str(V2M_DIR))
 
